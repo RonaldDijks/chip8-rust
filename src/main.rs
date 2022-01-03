@@ -60,6 +60,9 @@ struct Cpu {
     pc: u16,
     index: u16,
     registers: [u8; 16],
+    stack: [u16; 16],
+    stack_pointer: usize,
+    delay_timer: u8,
 }
 
 impl Cpu {
@@ -75,6 +78,9 @@ impl Cpu {
             pc: PC_START as u16,
             index: 0,
             registers: [0; 16],
+            stack: [0; 16],
+            stack_pointer: 0,
+            delay_timer: 0,
         }
     }
 
@@ -94,6 +100,10 @@ impl Cpu {
     }
 
     pub fn tick(&mut self) {
+        if self.delay_timer > 0 {
+            self.delay_timer -= 1
+        }
+
         let opcode = self.fetch_opcode();
 
         self.execute_opcode(opcode);
@@ -109,10 +119,10 @@ impl Cpu {
         println!("{:#06x}", opcode);
 
         let nibbles = (
-            (opcode & 0xF000) >> 12,
-            (opcode & 0x0F00) >> 8,
-            (opcode & 0x00F0) >> 4,
-            (opcode & 0x000F),
+            ((opcode & 0xF000) >> 12) as u8,
+            ((opcode & 0x0F00) >> 8) as u8,
+            ((opcode & 0x00F0) >> 4) as u8,
+            (opcode & 0x000F) as u8,
         );
         let nnn = (opcode & 0x0FFF) as u16;
         let nn = (opcode & 0x00FF) as u8;
@@ -122,13 +132,33 @@ impl Cpu {
 
         match nibbles {
             (0x0, 0x0, 0xE, 0x0) => self.op_00e0(),
+            (0x0, 0x0, 0xE, 0xE) => self.op_00ee(),
             (0x1, _, _, _) => self.op_1nnn(nnn),
+            (0x2, _, _, _) => self.op_2nnn(nnn),
+            (0x3, _, _, _) => self.op_3xnn(x, nn),
+            (0x4, _, _, _) => self.op_4xnn(x, nn),
+            (0x5, _, _, _) => self.op_5xy0(x, y),
             (0x6, _, _, _) => self.op_6xnn(x, nn),
             (0x7, _, _, _) => self.op_7xnn(x, nn),
+            (0x8, _, _, 0x0) => self.op_8xy0(x, y),
+            (0x8, _, _, 0x1) => self.op_8xy1(x, y),
+            (0x8, _, _, 0x2) => self.op_8xy2(x, y),
+            (0x8, _, _, 0x3) => self.op_8xy3(x, y),
+            (0x8, _, _, 0x4) => self.op_8xy4(x, y),
+            (0x8, _, _, 0x5) => self.op_8xy5(x, y),
+            (0x8, _, _, 0x6) => self.op_8xy6(x, y),
+            (0x8, _, _, 0x7) => self.op_8xy7(x, y),
+            (0x8, _, _, 0xE) => self.op_8xye(x, y),
+            (0x9, _, _, 0x0) => self.op_9xy0(x, y),
             (0xA, _, _, _) => self.op_annn(nnn),
             (0xD, _, _, _) => self.op_dxyn(x as usize, y as usize, n as usize),
+            (0xF, _, 0x1, 0x5) => self.op_fx15(x),
+            (0xF, _, 0x3, 0x3) => self.op_fx33(x),
+            (0xF, _, 0x5, 0x5) => self.op_fx55(x),
+            (0xF, _, 0x6, 0x5) => self.op_fx65(x),
             _ => {
-                panic!("unexpected opcode")
+                println!("unexpected opcode: {:#06x}", opcode);
+                loop {}
             }
         }
     }
@@ -138,8 +168,42 @@ impl Cpu {
         self.pc += 2;
     }
 
+    fn op_00ee(&mut self) {
+        self.stack_pointer -= 1;
+        self.pc = self.stack[self.stack_pointer];
+    }
+
     fn op_1nnn(&mut self, nnn: u16) {
         self.pc = nnn;
+    }
+
+    fn op_2nnn(&mut self, nnn: u16) {
+        self.stack[self.stack_pointer] = self.pc + 2;
+        self.stack_pointer += 1;
+        self.pc = nnn;
+    }
+
+    fn op_3xnn(&mut self, x: u8, nn: u8) {
+        if self.registers[x as usize] == nn {
+            self.pc += 2;
+        }
+        self.pc += 2;
+    }
+
+    fn op_4xnn(&mut self, x: u8, nn: u8) {
+        if self.registers[x as usize] != nn {
+            self.pc += 2;
+        }
+        self.pc += 2;
+    }
+
+    fn op_5xy0(&mut self, x: u8, y: u8) {
+        let x = self.registers[x as usize];
+        let y = self.registers[y as usize];
+        if x == y {
+            self.pc += 2;
+        }
+        self.pc += 2;
     }
 
     fn op_6xnn(&mut self, x: u8, nn: u8) {
@@ -155,13 +219,86 @@ impl Cpu {
         self.pc += 2;
     }
 
+    fn op_8xy0(&mut self, x: u8, y: u8) {
+        self.registers[x as usize] = self.registers[y as usize];
+        self.pc += 2;
+    }
+
+    fn op_8xy1(&mut self, x: u8, y: u8) {
+        self.registers[x as usize] |= self.registers[y as usize];
+        self.pc += 2;
+    }
+
+    fn op_8xy2(&mut self, x: u8, y: u8) {
+        self.registers[x as usize] &= self.registers[y as usize];
+        self.pc += 2;
+    }
+
+    fn op_8xy3(&mut self, x: u8, y: u8) {
+        self.registers[x as usize] ^= self.registers[y as usize];
+        self.pc += 2;
+    }
+
+    fn op_8xy4(&mut self, x: u8, y: u8) {
+        let vx = self.registers[x as usize];
+        let vy = self.registers[y as usize];
+        let (value, overflowed) = vx.overflowing_add(vy);
+        self.registers[x as usize] = value;
+        self.registers[0xF] = overflowed as u8;
+        self.pc += 2;
+    }
+
+    fn op_8xy5(&mut self, x: u8, y: u8) {
+        let vx = self.registers[x as usize];
+        let vy = self.registers[y as usize];
+        let (value, overflowed) = vx.overflowing_add(vy);
+        self.registers[0xF] = overflowed as u8;
+        self.registers[x as usize] = value;
+        self.pc += 2;
+    }
+
+    fn op_8xy6(&mut self, x: u8, _y: u8) {
+        let mut value = self.registers[x as usize];
+        let shifted_bit = value & 0xF;
+        value >>= 1;
+        self.registers[x as usize] = value;
+        self.registers[0xF] = shifted_bit;
+        self.pc += 2;
+    }
+
+    fn op_8xye(&mut self, x: u8, _y: u8) {
+        let mut value = self.registers[x as usize];
+        let shifted_bit = value >> 7;
+        value <<= 1;
+        self.registers[x as usize] = value;
+        self.registers[0xF] = shifted_bit;
+        self.pc += 2;
+    }
+
+    fn op_8xy7(&mut self, x: u8, y: u8) {
+        let vx = self.registers[x as usize];
+        let vy = self.registers[y as usize];
+        let (value, overflowed) = vy.overflowing_add(vx);
+        self.registers[0xF] = overflowed as u8;
+        self.registers[x as usize] = value;
+        self.pc += 2;
+    }
+
+    fn op_9xy0(&mut self, x: u8, y: u8) {
+        let x = self.registers[x as usize];
+        let y = self.registers[y as usize];
+        if x != y {
+            self.pc += 2;
+        }
+        self.pc += 2;
+    }
+
     fn op_annn(&mut self, nnn: u16) {
         self.index = nnn;
         self.pc += 2;
     }
 
     fn op_dxyn(&mut self, x: usize, y: usize, n: usize) {
-        println!("x: {}, y: {}, n: {}", x, y, n);
         self.registers[0x0f] = 0;
         for byte in 0..n {
             let y = (self.registers[y] as usize + byte) % Display::HEIGHT;
@@ -172,6 +309,36 @@ impl Cpu {
                 self.registers[0x0f] |= turned_off;
                 self.display.pixels[y][x] ^= color != 0;
             }
+        }
+        self.pc += 2;
+    }
+
+    fn op_fx15(&mut self, x: u8) {
+        self.delay_timer = self.registers[x as usize];
+        self.pc += 2;
+    }
+
+    fn op_fx33(&mut self, x: u8) {
+        let idx = self.index as usize;
+        let addr = x as usize;
+        self.memory[idx] = self.registers[addr] / 100;
+        self.memory[idx + 1] = (self.registers[addr] % 100) / 10;
+        self.memory[idx + 1] = self.registers[addr] % 10;
+        self.pc += 2;
+    }
+
+    fn op_fx55(&mut self, x: u8) {
+        for offset in 0..=x {
+            let addr = self.index + offset as u16;
+            self.memory[addr as usize] = self.registers[offset as usize];
+        }
+        self.pc += 2;
+    }
+
+    fn op_fx65(&mut self, x: u8) {
+        for offset in 0..=x {
+            let addr = self.index + offset as u16;
+            self.registers[offset as usize] = self.memory[addr as usize];
         }
         self.pc += 2;
     }
@@ -217,7 +384,7 @@ fn main() {
         .unwrap()
     };
 
-    let rom = include_bytes!("./../roms/ibm_logo.ch8");
+    let rom = include_bytes!("./../roms/test_opcode.ch8");
     let mut cpu = Cpu::new();
     cpu.load(rom);
     let renderer = DisplayRenderer;
