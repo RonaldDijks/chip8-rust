@@ -1,5 +1,8 @@
+use std::path::PathBuf;
+
 use log::error;
 use pixels::{Pixels, SurfaceTexture};
+use structopt::StructOpt;
 use winit::{
     dpi::LogicalSize,
     event::{Event, VirtualKeyCode},
@@ -116,8 +119,6 @@ impl Cpu {
     }
 
     fn execute_opcode(&mut self, opcode: u16) {
-        println!("{:#06x}", opcode);
-
         let nibbles = (
             ((opcode & 0xF000) >> 12) as u8,
             ((opcode & 0x0F00) >> 8) as u8,
@@ -360,7 +361,16 @@ impl DisplayRenderer {
     }
 }
 
+#[derive(Debug, StructOpt)]
+#[structopt(name = "chip-8", about = "A chip-8 emulator.")]
+struct Opt {
+    #[structopt(parse(from_os_str))]
+    input: PathBuf,
+}
+
 fn main() {
+    env_logger::init();
+    let opt = Opt::from_args();
     let event_loop = EventLoop::new();
     let mut input = WinitInputHelper::new();
     let window = {
@@ -384,9 +394,9 @@ fn main() {
         .unwrap()
     };
 
-    let rom = include_bytes!("./../roms/test_opcode.ch8");
+    let rom = std::fs::read(opt.input).unwrap();
     let mut cpu = Cpu::new();
-    cpu.load(rom);
+    cpu.load(&rom);
     let renderer = DisplayRenderer;
 
     event_loop.run(move |event, _, control_flow| {
