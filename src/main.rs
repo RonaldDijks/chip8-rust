@@ -1,10 +1,13 @@
-use std::path::PathBuf;
-
 use cpu::Cpu;
 use display::Display;
+use gui::Gui;
 use log::error;
 use pixels::{Pixels, SurfaceTexture};
 use renderer::DisplayRenderer;
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 use structopt::StructOpt;
 use winit::{
     dpi::LogicalSize,
@@ -16,6 +19,7 @@ use winit_input_helper::WinitInputHelper;
 
 mod cpu;
 mod display;
+mod gui;
 mod renderer;
 
 #[derive(Debug, StructOpt)]
@@ -56,10 +60,24 @@ fn main() {
     cpu.load(&rom);
     let renderer = DisplayRenderer;
 
+    let mut gui = Gui::new(&window, &pixels);
+
+    let mut last_render = Instant::now();
+
     event_loop.run(move |event, _, control_flow| {
         if let Event::RedrawRequested(_) = event {
-            if pixels
-                .render()
+            renderer.draw(cpu.get_display(), pixels.get_frame());
+
+            gui.prepare(&window).expect("gui.prepare() failed");
+
+            let render_result = pixels.render_with(|encoder, render_target, context| {
+                context.scaling_renderer.render(encoder, render_target);
+                gui.render(&window, encoder, render_target, context, &cpu)?;
+
+                Ok(())
+            });
+
+            if render_result
                 .map_err(|e| error!("pixels.render() failed: {}", e))
                 .is_err()
             {
@@ -68,11 +86,9 @@ fn main() {
             }
         }
 
+        gui.handle_event(&window, &event);
+
         if input.update(&event) {
-            renderer.draw(cpu.get_display(), pixels.get_frame());
-
-            cpu.tick();
-
             // Close events
             if input.key_pressed(VirtualKeyCode::Escape) || input.quit() {
                 *control_flow = ControlFlow::Exit;
@@ -83,9 +99,14 @@ fn main() {
             if let Some(size) = input.window_resized() {
                 pixels.resize_surface(size.width, size.height);
             }
-
-            // Update internal state and request a redraw
-            window.request_redraw();
         }
+
+        let now = Instant::now();
+        if (now - last_render) > Duration::from_secs_f32(1. / 15.) {
+            last_render = now;
+            cpu.tick();
+        }
+
+        window.request_redraw();
     })
 }

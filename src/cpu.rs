@@ -24,12 +24,12 @@ const FONT: [u8; 80] = [
 pub struct Cpu {
     memory: [u8; 4096],
     display: Display,
-    pc: u16,
-    index: u16,
-    registers: [u8; 16],
-    stack: [u16; 16],
-    stack_pointer: usize,
-    delay_timer: u8,
+    pub pc: u16,
+    pub index: u16,
+    pub registers: [u8; 16],
+    pub stack: [u16; 16],
+    pub stack_pointer: usize,
+    pub delay_timer: u8,
 }
 
 impl Cpu {
